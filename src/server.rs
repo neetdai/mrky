@@ -1,8 +1,10 @@
 use std::net::SocketAddr;
 
-use compio::{bytes::{BufMut, BytesMut}, io::AsyncRead, net::{TcpListener, TcpStream}, runtime::spawn, BufResult};
+use compio::{bytes::{BufMut, Bytes, BytesMut}, io::AsyncRead, net::{TcpListener, TcpStream}, runtime::spawn, BufResult};
 use anyhow::Error as AnyError;
 use redis_protocol::{error::{RedisParseError, RedisProtocolErrorKind}, resp3::{decode::{self, complete::{decode_bytes, decode_bytes_mut}}, types::BytesFrame}};
+
+use crate::command::Command;
 
 
 #[derive(Debug)]
@@ -74,22 +76,50 @@ impl Service {
         Ok(())
     }
 
-    fn match_command(frame: &BytesFrame) {
-        match frame {
-            BytesFrame::Array { data, attributes }  => {
-                match data.first() {
-                    Some(BytesFrame::SimpleString { data, attributes }) if data.as_ref() == b"SET" => {
+    fn match_command(frame: &BytesFrame) -> Result<Command, Bytes> {
+        // match frame {
+        //     BytesFrame::Array { data, attributes }  => {
+        //         let frame_data = data;
+        //         match frame_data.split_first() {
+        //             Some((command, args)) => {
+        //                 match command {
+        //                     BytesFrame::SimpleString { data, attributes } => {
+        //                         match data.as_ref() {
+        //                             b"SET" => {
 
-                    }
-                    Some(BytesFrame::SimpleString { data, attributes }) if data.as_ref() == b"GET" => {
+        //                             }
+        //                             b"GET" => {
 
-                    }
-                    _ => {}
-                }
-            }
-            _ => {
+        //                             }
+        //                             _ => {},
+        //                         }
+        //                     },
+        //                     _ => {}
+        //                 }
+        //             }
+        //             _ => {}
+        //         }
+        //     }
+        //     _ => {
 
-            }
-        }
+        //     }
+        // }
+        let frame_data = if let BytesFrame::Array { data, attributes } = frame {
+            data
+        } else {
+            return Err(Bytes::from_static(b"unknown command"))
+        };
+
+        let Some((command, args)) = frame_data.split_first() else {
+            return Err(Bytes::from_static(b"unknown command"))
+        };
+
+        let command_name = if let BytesFrame::SimpleString { data, attributes }  = command{
+            data    
+        } else {
+            return Err(Bytes::from_static(b"unknown command"))
+        };
+
+        Ok(Command::new(command_name, args)?)
     }
 }
