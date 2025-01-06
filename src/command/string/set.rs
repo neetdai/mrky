@@ -1,41 +1,34 @@
 use compio::bytes::Bytes;
 use redis_protocol::resp3::types::BytesFrame;
 
-use crate::command::command_trait::Cmd;
-
-
+use crate::command::{command_trait::Cmd, CommandError};
 
 #[derive(Debug)]
 pub(crate) struct Set {
     pub(crate) key: Bytes,
     pub(crate) value: Bytes,
-    pub(crate) expire: Option<i64>,
 }
 
 impl Cmd for Set {
-    fn parse(args: &[redis_protocol::resp3::types::BytesFrame]) -> Result<Self, Bytes> {
+    fn parse(args: &[redis_protocol::resp3::types::BytesFrame]) -> Result<Self, CommandError> {
         match args {
-            [key,value] => {
+            [key, value] => {
                 let key = if let BytesFrame::SimpleString { data, attributes } = key {
                     data.clone()
                 } else {
-                    return Err(Bytes::from_static(b"invalid key"));
+                    return Err(CommandError::Syntax);
                 };
 
                 let value = if let BytesFrame::SimpleString { data, attributes } = value {
                     data.clone()
                 } else {
-                    return Err(Bytes::from_static(b"invalid value"));
+                    return Err(CommandError::Invalid);
                 };
 
-                Ok(Self {
-                    key,
-                    value,
-                    expire: None,
-                })
+                Ok(Self { key, value })
             }
             _ => {
-                return Err(Bytes::from_static(b"syntax error"));
+                Err(CommandError::Invalid)
             }
         }
     }
