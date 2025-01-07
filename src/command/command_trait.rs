@@ -5,4 +5,6 @@ use super::CommandError;
 
 pub(crate) trait Cmd: Sized {
     fn parse(args: &[BytesFrame]) -> Result<Self, CommandError>;
+
+    fn get_key(&self) -> &Bytes;
 }

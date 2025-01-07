@@ -20,9 +20,11 @@ impl Cmd for Get {
 
                 Ok(Self { key })
             }
-            _ => {
-                Err(CommandError::Invalid)
-            }
+            _ => Err(CommandError::Invalid),
         }
+    }
+
+    fn get_key(&self) -> &Bytes {
+        &self.key
     }
 }

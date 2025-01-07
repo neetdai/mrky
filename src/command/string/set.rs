@@ -27,9 +27,11 @@ impl Cmd for Set {
 
                 Ok(Self { key, value })
             }
-            _ => {
-                Err(CommandError::Invalid)
-            }
+            _ => Err(CommandError::Invalid),
         }
+    }
+
+    fn get_key(&self) -> &Bytes {
+        &self.key
     }
 }

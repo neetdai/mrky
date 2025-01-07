@@ -55,4 +55,11 @@ impl Command {
             _ => Err(CommandError::Unknown),
         }
     }
+
+    pub(crate) fn get_key(&self) -> &Bytes {
+        match self {
+            Command::Set(set) => set.get_key(),
+            Command::Get(get) => get.get_key(),
+        }
+    }
 }
