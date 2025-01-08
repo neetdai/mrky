@@ -8,6 +8,7 @@ use compio::{
     runtime::spawn,
     BufResult,
 };
+use crossbeam_channel::{bounded, unbounded};
 use redis_protocol::{
     error::{RedisParseError, RedisProtocolErrorKind},
     resp3::{
@@ -19,6 +20,7 @@ use redis_protocol::{
         types::{BytesFrame, Resp3Frame},
     },
 };
+use tracing::{error, instrument, span, trace, trace_span};
 
 use crate::{
     command::{Command, CommandError},
@@ -35,12 +37,13 @@ impl Server {
         Self { addr }
     }
 
+    #[instrument]
     pub async fn run(mut self, db_manager: DBManager) -> Result<(), AnyError> {
         let listener = TcpListener::bind(self.addr).await?;
 
         loop {
             let (stream, addr) = listener.accept().await?;
-
+            trace!("remote addr: {}", addr);
             let service = Service::new(stream);
             spawn(service.handle(db_manager.clone())).detach();
         }
@@ -59,9 +62,11 @@ impl Service {
         Self { stream }
     }
 
+    #[instrument]
     async fn handle(mut self, db_manager: DBManager) -> Result<(), AnyError> {
         let mut read_buf = BytesMut::with_capacity(128);
         let mut write_buf = BytesMut::with_capacity(128);
+        let (sender, receiver) = bounded(64);
 
         'main: loop {
             let buf = [0u8; 64];
@@ -75,13 +80,28 @@ impl Service {
                     match decode_bytes_mut(&mut read_buf) {
                         Ok(Some((frame, _, _))) => match Self::match_command(&frame) {
                             Ok(command) => {
-                                db_manager.send_command(command);
+                                
+                                db_manager.send_command(command, sender.clone());
+                                match receiver.recv() {
+                                    Err(e) => {
+                                        error!("Error receiving response: {:?}", e);
+                                        break 'main;
+                                    }
+                                    Ok(frame) => {
+                                        write_buf.resize(frame.encode_len(false), 0);
+                                        encode_bytes(&mut write_buf, &frame, false).unwrap();
+
+                                        let buf = write_buf.split();
+                                        let buf = buf.freeze();
+                                        let BufResult(size, buf) = self.stream.write(buf).await;
+                                        size?;
+                                    }
+                                }
                             }
                             Err(command_error) => {
                                 let frame = BytesFrame::from(command_error);
-                                let mut buf = Vec::with_capacity(frame.len());
-                                encode_bytes(buf.as_mut_slice(), &frame, false).unwrap();
-                                write_buf.extend_from_slice(&buf);
+                                write_buf.resize(frame.encode_len(false), 0);
+                                encode_bytes(&mut write_buf, &frame, false).unwrap();
 
                                 let buf = write_buf.split();
                                 let buf = buf.freeze();
@@ -101,6 +121,7 @@ impl Service {
         Ok(())
     }
 
+    #[instrument]
     fn match_command(frame: &BytesFrame) -> Result<Command, CommandError> {
         let frame_data = if let BytesFrame::Array { data, attributes } = frame {
             data
@@ -112,7 +133,7 @@ impl Service {
             return Err(CommandError::Unknown);
         };
 
-        let command_name = if let BytesFrame::SimpleString { data, attributes } = command {
+        let command_name = if let BytesFrame::BlobString { data, attributes } = command {
             data
         } else {
             return Err(CommandError::Unknown);

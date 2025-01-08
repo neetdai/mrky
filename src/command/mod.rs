@@ -15,6 +15,8 @@ use redis_protocol::{
 };
 use string::*;
 
+use crate::db::Bucket;
+
 #[derive(Debug)]
 pub(crate) enum CommandError {
     Syntax,
@@ -60,6 +62,13 @@ impl Command {
         match self {
             Command::Set(set) => set.get_key(),
             Command::Get(get) => get.get_key(),
+        }
+    }
+
+    pub(crate) fn apply(self, bucket: &mut Bucket) -> BytesFrame {
+        match self {
+            Command::Set(set) => set.apply(bucket),
+            Command::Get(get) => get.apply(bucket),
         }
     }
 }

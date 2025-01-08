@@ -1,28 +1,55 @@
 use compio::{bytes::Bytes, runtime::spawn_blocking};
 use crossbeam_channel::{bounded, Sender};
+use redis_protocol::resp3::types::BytesFrame;
+use tracing::{error, instrument};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::command::Command;
 
 #[derive(Debug)]
-enum Entry {
+pub(crate) enum Entry {
     String(Value),
 }
 
 #[derive(Debug)]
-enum Value {
+pub(crate) enum Value {
     Inner(Bytes),
 }
 
+impl Value {
+    pub(crate) fn new(value: Bytes) -> Self {
+        Self::Inner(value)
+    }
+
+    pub(crate) fn get(&self) -> &Bytes {
+        match self {
+            Self::Inner(value) => value,
+        }
+    }
+}
+
 #[derive(Debug)]
-struct Bucket {
-    map: HashMap<Bytes, Entry>,
+pub(crate) struct Bucket {
+    pub(crate) map: HashMap<Bytes, Entry>,
+}
+
+impl Bucket {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+}
+
+thread_local! {
+    static BUCKET: RefCell<Bucket> = RefCell::new(Bucket::new());
 }
 
 #[derive(Debug)]
 struct DBManagerInner {
-    sender: Vec<Sender<Command>>,
+    sender: Vec<Sender<(Command, Sender<BytesFrame>)>>,
 }
 
 impl DBManagerInner {
@@ -30,14 +57,23 @@ impl DBManagerInner {
         let cpu_num = 4usize;
         let mut buckets = Vec::with_capacity(cpu_num);
         for _ in 0..cpu_num {
-            let (sender, receiver) = bounded(128);
+            let (sender, receiver) = bounded::<(Command, Sender<BytesFrame>)>(128);
 
-            spawn_blocking(move || loop {
-                match receiver.recv() {
-                    Ok(command) => {}
-                    Err(e) => {
-                        println!("db error: {}", e);
-                        break;
+            spawn_blocking(move || {
+                'spawn_blocking: loop {
+                    match receiver.recv() {
+                        Ok((command, sender)) => {
+                            BUCKET.with_borrow_mut(|bucket| {
+                                let frame = command.apply(bucket);
+                                if let Err(e) = sender.try_send(frame) {
+                                    error!("bucket send error: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            println!("db error: {}", e);
+                            break 'spawn_blocking;
+                        }
                     }
                 }
             })
@@ -62,10 +98,13 @@ impl DBManager {
         }
     }
 
-    pub fn send_command(&self, command: Command) {
+    #[instrument]
+    pub fn send_command(&self, command: Command, sender: Sender<BytesFrame>) {
         let position = crc32fast::hash(command.get_key()) as usize;
         let index = position % self.inner.sender.len();
 
-        self.inner.sender[index].send(command).unwrap();
+        if let Err(e) = self.inner.sender[index].send((command, sender)) {
+            error!("db send command error: {}", e);
+        }
     }
 }
