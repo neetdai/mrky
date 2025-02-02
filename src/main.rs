@@ -12,8 +12,6 @@ fn main() {
     let span = info_span!("main");
     let _enter = span.enter();
     RuntimeBuilder::new().build().unwrap().block_on(async {
-        
-
         let db_manager = DBManager::new();
 
         let addr = "127.0.0.1:6381".parse().unwrap();
