@@ -1,16 +1,17 @@
 use compio::{bytes::Bytes, runtime::spawn_blocking};
 use crossbeam_channel::{bounded, Sender};
+use hashbrown::HashMap;
 use redis_protocol::resp3::types::BytesFrame;
-use tracing::{error, instrument};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::{error, instrument};
 
 use crate::command::Command;
 
 #[derive(Debug)]
 pub(crate) enum Entry {
     String(Value),
+    List(Vec<Value>),
 }
 
 #[derive(Debug)]
@@ -49,7 +50,12 @@ thread_local! {
 
 #[derive(Debug)]
 struct DBManagerInner {
-    sender: Vec<Sender<(Command, Sender<BytesFrame>)>>,
+    sender: Vec<
+        Sender<(
+            Box<dyn FnOnce(&mut Bucket) -> BytesFrame + Send>,
+            Sender<BytesFrame>,
+        )>,
+    >,
 }
 
 impl DBManagerInner {
@@ -57,23 +63,24 @@ impl DBManagerInner {
         let cpu_num = 4usize;
         let mut buckets = Vec::with_capacity(cpu_num);
         for _ in 0..cpu_num {
-            let (sender, receiver) = bounded::<(Command, Sender<BytesFrame>)>(128);
+            let (sender, receiver) = bounded::<(
+                Box<dyn FnOnce(&mut Bucket) -> BytesFrame + Send>,
+                Sender<BytesFrame>,
+            )>(128);
 
-            spawn_blocking(move || {
-                'spawn_blocking: loop {
-                    match receiver.recv() {
-                        Ok((command, sender)) => {
-                            BUCKET.with_borrow_mut(|bucket| {
-                                let frame = command.apply(bucket);
-                                if let Err(e) = sender.try_send(frame) {
-                                    error!("bucket send error: {}", e);
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            println!("db error: {}", e);
-                            break 'spawn_blocking;
-                        }
+            spawn_blocking(move || 'spawn_blocking: loop {
+                match receiver.recv() {
+                    Ok((command_fn, sender)) => {
+                        BUCKET.with_borrow_mut(|bucket| {
+                            let frame = command_fn(bucket);
+                            if let Err(e) = sender.try_send(frame) {
+                                error!("bucket send error: {}", e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        println!("db error: {}", e);
+                        break 'spawn_blocking;
                     }
                 }
             })
@@ -98,13 +105,29 @@ impl DBManager {
         }
     }
 
-    #[instrument]
-    pub fn send_command(&self, command: Command, sender: Sender<BytesFrame>) {
-        let position = crc32fast::hash(command.get_key()) as usize;
-        let index = position % self.inner.sender.len();
+    // #[instrument]
+    // pub fn send_command(&self, command: Command, sender: Sender<BytesFrame>) {
+    //     let position = crc32fast::hash(command.get_key()) as usize;
+    //     let index = position % self.inner.sender.len();
 
-        if let Err(e) = self.inner.sender[index].send((command, sender)) {
-            error!("db send command error: {}", e);
-        }
+    //     if let Err(e) = self.inner.sender[index].send((command, sender)) {
+    //         error!("db send command error: {}", e);
+    //     }
+    // }
+
+    pub(crate) fn get_bucket(&self, key: &[u8]) -> usize {
+        let position = crc32fast::hash(key) as usize;
+        let index = position % self.inner.sender.len();
+        index
+    }
+
+    pub(crate) fn get_sender(
+        &self,
+        index: usize,
+    ) -> &Sender<(
+        Box<dyn FnOnce(&mut Bucket) -> BytesFrame + Send>,
+        Sender<BytesFrame>,
+    )> {
+        &self.inner.sender[index]
     }
 }

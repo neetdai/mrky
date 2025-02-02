@@ -80,8 +80,8 @@ impl Service {
                     match decode_bytes_mut(&mut read_buf) {
                         Ok(Some((frame, _, _))) => match Self::match_command(&frame) {
                             Ok(command) => {
-                                
-                                db_manager.send_command(command, sender.clone());
+                                command.send_command(db_manager.clone(), sender.clone());
+                                // db_manager.send_command(command, sender.clone());
                                 match receiver.recv() {
                                     Err(e) => {
                                         error!("Error receiving response: {:?}", e);
