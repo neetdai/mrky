@@ -2,7 +2,7 @@ use compio::{bytes::Bytes, runtime::spawn_blocking};
 use crossbeam_channel::{bounded, Sender};
 use hashbrown::HashMap;
 use redis_protocol::resp3::types::BytesFrame;
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::VecDeque};
 use std::sync::Arc;
 use tracing::{error, instrument};
 
@@ -11,7 +11,7 @@ use crate::command::Command;
 #[derive(Debug)]
 pub(crate) enum Entry {
     String(Value),
-    List(Vec<Value>),
+    List(VecDeque<Value>),
 }
 
 #[derive(Debug)]
@@ -117,8 +117,7 @@ impl DBManager {
 
     pub(crate) fn get_bucket(&self, key: &[u8]) -> usize {
         let position = crc32fast::hash(key) as usize;
-        let index = position % self.inner.sender.len();
-        index
+        position % self.inner.sender.len()
     }
 
     pub(crate) fn get_sender(

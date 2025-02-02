@@ -51,6 +51,8 @@ pub(crate) enum Command {
     Set(set::Set),
     Get(get::Get),
     Mget(mget::Mget),
+    LPush(lpush::Lpush),
+    LRange(lrange::Lrange),
 }
 
 impl Command {
@@ -59,6 +61,8 @@ impl Command {
             b"SET" => Ok(Command::Set(set::Set::parse(args)?)),
             b"GET" => Ok(Command::Get(get::Get::parse(args)?)),
             b"MGET" => Ok(Command::Mget(mget::Mget::parse(args)?)),
+            b"LPUSH" => Ok(Command::LPush(lpush::Lpush::parse(args)?)),
+            b"LRANGE" => Ok(Command::LRange(lrange::Lrange::parse(args)?)),
             _ => Err(CommandError::Unknown),
         }
     }
@@ -68,6 +72,8 @@ impl Command {
             Self::Set(set) => set.send_command(manager, sender),
             Self::Get(get) => get.send_command(manager, sender),
             Self::Mget(mget) => mget.send_command(manager, sender),
+            Self::LPush(lpush) => lpush.send_command(manager, sender),
+            Self::LRange(lrange) => lrange.send_command(manager, sender),
         }
     }
 }
