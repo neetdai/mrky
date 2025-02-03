@@ -1,10 +1,10 @@
 use compio::bytes::Bytes;
-use crossbeam_channel::Sender;
+use crossbeam_channel::{bounded, Sender};
 use redis_protocol::resp3::types::BytesFrame;
 use tracing::{error, instrument};
 
 use crate::{
-    command::{command_trait::Cmd, CommandError},
+    command::{command_trait::Cmd, list, CommandError},
     db::{Bucket, DBManager},
 };
 
@@ -32,7 +32,7 @@ impl Cmd for Mget {
     }
 
     fn get_key(&self) -> &Bytes {
-        todo!()
+        unreachable!()
     }
 
     #[instrument]
@@ -40,11 +40,20 @@ impl Cmd for Mget {
     where
         Self: Send + 'static,
     {
+        let key_len = self.keys.len();
+        let (get_sender, get_receiver) = bounded(key_len);
+        let mut list = Vec::with_capacity(key_len);
+
         for get in self.keys.into_iter().map(|key| {
             let get = Get { key };
             get
         }) {
-            get.send_command(manager.clone(), sender.clone());
+            get.send_command(manager.clone(), get_sender.clone());
+            list.push(get_receiver.recv().unwrap());
+        }
+
+        if let Err(e) = sender.try_send(BytesFrame::Array { data: list, attributes: None }) {
+            error!("Failed to send response: {:?}", e);
         }
     }
 
